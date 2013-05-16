@@ -24,7 +24,7 @@ using namespace std;
 typedef struct {
   int id;
   char *message;
-  void (* work)(int id);
+  int (* work)(int id);
 } job;
 
 typedef struct {
@@ -40,7 +40,7 @@ typedef struct {
 } worker_args;
 
 void read_opts(int argc, char **argv);
-void work(int id);
+int work(int id);
 void execute_job(job *j);
 void *producer(void *args);
 void *worker(void *args);
@@ -153,12 +153,13 @@ void read_opts(int argc, char **argv)
   }
 }
 
-void work(int id)
+int work(int id)
 {
   int wait = rand() % JOB_WAIT;
   log(2, "Job[%d]: Time spent = %d", id, wait);
   
   usleep(wait);
+  return wait;
 }
 
 void execute_job(job *j)
@@ -168,16 +169,17 @@ void execute_job(job *j)
   float percent_complete = (float) (100 * (j->id + 1)) / total_jobs;
   int places = max(0, (int) log10f((float) steps) - 2);
 
-  j->work(j->id);
+  int value = j->work(j->id);
 
   log_erase(
     verbosity, 
-    "%s, job %d/%d (%.*f%%) reporting for duty!", 
-    j->message, 
-    j->id + 1, 
+    "Job %d/%d (%.*f%%) executed: %s %6d", 
+    j->id + 1,
     total_jobs, 
     places, 
-    percent_complete
+    percent_complete,
+    j->message,
+    value
   );
 }
 
