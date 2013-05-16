@@ -1,14 +1,15 @@
 #include <iostream>
 #include <sstream>
 #include <queue>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include <unistd.h>
 
-// #define LIMIT_TOTAL 1000
-// #define LIMIT_SIMUL 200
+#define LIMIT_TOTAL 1000
+#define LIMIT_SIMUL 200
 #define MESSAGE "Howdy"
 #define PRODUCER_WAIT 10
 #define CONSUMER_WAIT 120
@@ -26,24 +27,19 @@ typedef struct {
   pthread_cond_t *notFull, *notEmpty;
 } worker_queue;
 
+void read_opts(int argc, char **argv);
 void *producer(void *args);
 void *consumer(void *args);
 worker_queue *wqueue_init();
 void worker_destroy(worker *w);
 void wqueue_destroy(worker_queue *wqueue);
-void log(int level, string message);
+void log(int level, const char *format, ...);
 
 int total, simul, verbose;
 
 int main (int argc, char **argv)
 {
-  if (argc < 4) {
-    cout << "Usage: " << argv[0] << " <total workers> <worker queue size> <verbose: {0,1,2,3}>" << endl;
-  } else {
-    total = strtol(argv[1], (char **) NULL, 10);
-    simul = strtol(argv[2], (char **) NULL, 10);
-    verbose = strtol(argv[3], (char **) NULL, 10);
-  }
+  read_opts(argc, argv);
 
   worker_queue *wqueue = wqueue_init();
   pthread_t pro_thread, con_thread;
@@ -56,6 +52,33 @@ int main (int argc, char **argv)
   wqueue_destroy(wqueue);
 
   return 0;
+}
+
+void read_opts(int argc, char **argv)
+{
+  int opt;
+
+  total = LIMIT_TOTAL;
+  simul = LIMIT_SIMUL;
+  verbose = 0;
+
+  while ((opt = getopt(argc, argv, "w:q:v:")) != -1) {
+    switch (opt) {
+    case 'w':
+      total = atoi(optarg);
+      break;
+    case 'q':
+      simul = atoi(optarg);
+      break;
+    case 'v':
+      verbose = atoi(optarg);
+      break;
+    default:
+      cout << "Usage: " << argv[0] << " [-w <total workers> [-q <worker queue size> [-v<verbosity: {0,1,2,3}>]]]" 
+           << endl;
+      exit(EXIT_FAILURE);
+    }
+  }
 }
 
 void *producer(void *args)
@@ -75,35 +98,31 @@ void *producer(void *args)
     pthread_mutex_lock (wqueue->mutex);
 
     while (wqueue->workers->size() >= simul) {
-      stringstream l_message;
-      l_message << "Producer: waiting to add worker " << w->id << ", queue FULL (" << wqueue->workers->size()
-                << " slots filled).";
-
-      log(2, l_message.str());
-
+      log(2, "Producer: waiting to add worker %d, queue FULL (%d slots filled).", w->id, wqueue->workers->size());
       pthread_cond_wait (wqueue->notFull, wqueue->mutex);
     }
 
-    // cout << "Producer: Created worker " << w->id << "." << endl;
+    log(3, "Producer: Created worker %d.", w->id);
     wqueue->workers->push(w);
 
-    if (verbose > 0) {
-      cout << "Producer: Added worker " << w->id << " (" << w->message << ") to queue, qsize = "
-           << wqueue->workers->size() << " (m = " << wqueue->workers->size() * sizeof(worker) << " bytes)" << endl;
-    }
+    log(
+      1, 
+      "Producer: Added worker %d (%s) to queue, qsize = %d (m = %d bytes)", 
+      w->id, 
+      w->message, 
+      wqueue->workers->size(), 
+      wqueue->workers->size() * sizeof(worker)
+    );
 
     pthread_mutex_unlock (wqueue->mutex);
     pthread_cond_signal (wqueue->notEmpty);
 
     wait = rand() % PRODUCER_WAIT;
-    // cout << "Producer wait: " << wait << endl;
+    log(3, "Producer wait: %d", wait);
 
     usleep (wait);
   }
-
-
 }
-
 
 void *consumer(void *args)
 {
@@ -117,7 +136,7 @@ void *consumer(void *args)
     pthread_mutex_lock (wqueue->mutex);
 
     while (wqueue->workers->empty()) {
-      // cout << "Consumer: queue EMPTY." << endl;
+      log(2, "Consumer: queue EMPTY.");
       pthread_cond_wait (wqueue->notEmpty, wqueue->mutex);
     }
 
@@ -126,12 +145,19 @@ void *consumer(void *args)
     pthread_mutex_unlock (wqueue->mutex);
     pthread_cond_signal (wqueue->notFull);
 
-    cout << "Consumer: Removed worker " << w->id << " (" << w->message << ") from queue, qsize = "
-         << wqueue->workers->size() << " (m = " << wqueue->workers->size() * sizeof(worker) << " bytes)" << endl;
+    log(
+      1, 
+      "Consumer: Removed worker %d (%s) from queue, qsize = %d (m = %d bytes)", 
+      w->id, 
+      w->message, 
+      wqueue->workers->size(), 
+      wqueue->workers->size() * sizeof(worker)
+    );
 
     worker_destroy(w);
+
     wait = rand() % CONSUMER_WAIT;
-    // cout << "Consumer wait: " << wait << endl;
+    log(3, "Consumer wait: %d", wait);
 
     usleep(wait);
   }
@@ -171,9 +197,14 @@ void worker_destroy(worker *w)
   free(w);
 }
 
-void log(int level, string message)
+void log(int level, const char *format, ...)
 {
+  va_list argp;
+
   if (verbose >= level) {
-    cout << message <<endl;
+    va_start(argp, format);
+    fflush(stdout);
+    vprintf(format, argp);
+    printf("\n");
   }
 }
