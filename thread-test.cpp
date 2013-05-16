@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <pthread.h>
+#include <limits.h>
 #include <unistd.h>
 
 #define LIMIT_TOTAL 1000
@@ -64,7 +65,7 @@ int main (int argc, char **argv)
   // Adjusting this from the default greatly reduces the amount of memory used 
   // per thread.  Too small however, and your thread won't be created or your 
   // workers won't run.
-  pthread_attr_setstacksize(&pattr, 16 * 1024);
+  pthread_attr_setstacksize(&pattr, PTHREAD_STACK_MIN);
   
   wqueue = wqueue_init();
 
