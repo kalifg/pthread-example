@@ -1,6 +1,7 @@
 #include <iostream>
 #include <sstream>
 #include <queue>
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -57,7 +58,14 @@ int main (int argc, char **argv)
   worker_queue *wqueue;
   consumer_args *args[num_threads];
   pthread_t pro_thread, con_threads[num_threads];
+  int create_flag;
+  pthread_attr_t pattr;
 
+  // Adjusting this from the default greatly reduces the amount of memory used 
+  // per thread.  Too small however, and your thread won't be created or your 
+  // workers won't run.
+  pthread_attr_setstacksize(&pattr, 16 * 1024);
+  
   wqueue = wqueue_init();
 
   pthread_create(&pro_thread, NULL, producer, wqueue);
@@ -69,18 +77,34 @@ int main (int argc, char **argv)
     args[i]->wqueue = wqueue;
     args[i]->id = i;
 
-    pthread_create(&con_threads[i], NULL, consumer, args[i]);
+    create_flag = pthread_create(&con_threads[i], &pattr, consumer, args[i]);
+
+    if (create_flag) {
+      switch (create_flag) {
+      case EAGAIN:
+        cout << "System thread limit reached (" << i << ").";
+        break;
+      default:
+        cout << "Error in thread attributes.";
+      }
+
+      cout << "  No more threads will be created." << endl;
+      num_threads = i;
+    }
   }
 
-  pthread_join(pro_thread, NULL);
+  if (num_threads > 0) {
+    pthread_join(pro_thread, NULL);
 
-  for (int i = 0; i < num_threads; i++) {
-    pthread_join(con_threads[i], NULL);
-    free(args[i]);
+    for (int i = 0; i < num_threads; i++) {
+      pthread_join(con_threads[i], NULL);
+      free(args[i]);
+    }
+
+    wqueue_destroy(wqueue);
   }
 
-  wqueue_destroy(wqueue);
-
+  cout << endl;
   return 0;
 }
 
@@ -211,6 +235,7 @@ void *producer(void *args)
   }
 
   pthread_cond_broadcast(wqueue->notEmpty);
+  pthread_exit(NULL);
 }
 
 void *consumer(void *args)
@@ -269,7 +294,9 @@ void *consumer(void *args)
   }
 
   log(1, "Consumer[%d]: Queue says Producer is finished, exiting after executing %d jobs.", id, jobs_executed);
+
   pthread_cond_signal(wqueue->notEmpty);
+  pthread_exit(NULL);
 }
 
 worker_queue *wqueue_init()
