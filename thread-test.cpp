@@ -11,13 +11,13 @@
 #include <limits.h>
 #include <unistd.h>
 
-#define LIMIT_TOTAL 1000
-#define LIMIT_SIMUL 200
+#define TOTAL_JOBS 1000
+#define QUEUE_SIZE 200
 #define NUM_THREADS 1
 #define MESSAGE "Howdy"
 #define PRODUCER_WAIT 10
-#define CONSUMER_WAIT 120
-#define WORKER_WAIT 75
+#define WORKER_WAIT 120
+#define JOB_WAIT 75
 
 using namespace std;
 
@@ -25,61 +25,61 @@ typedef struct {
   int id;
   char *message;
   void (* work)(int id);
-} worker;
+} job;
 
 typedef struct {
-  queue<worker *> *workers;
+  queue<job *> *jobs;
   pthread_mutex_t *mutex;
   pthread_cond_t *notFull, *notEmpty;
   bool producer_finished;
-} worker_queue;
+} job_queue;
 
 typedef struct {
   int id;
-  worker_queue *wqueue;
-} consumer_args;
+  job_queue *jqueue;
+} worker_args;
 
 void read_opts(int argc, char **argv);
 void work(int id);
-void execute_worker(worker *w);
+void execute_job(job *j);
 void *producer(void *args);
-void *consumer(void *args);
-worker_queue *wqueue_init();
-void worker_destroy(worker *w);
-void wqueue_destroy(worker_queue *wqueue);
+void *worker(void *args);
+job_queue *jqueue_init();
+void job_destroy(job *j);
+void jqueue_destroy(job_queue *jqueue);
 void log(int level, const char *format, ...);
 void log_erase(int level, const char *format, ...);
 
-int total, simul, num_threads, verbose, steps;
+int total_jobs, simul, num_threads, verbose, steps;
 
 int main (int argc, char **argv)
 {
   read_opts(argc, argv);
 
-  worker_queue *wqueue;
-  consumer_args *args[num_threads];
+  job_queue *jqueue;
+  worker_args *args[num_threads];
   pthread_t pro_thread, con_threads[num_threads];
   int create_flag;
   pthread_attr_t pattr;
 
   // Adjusting this from the default greatly reduces the amount of memory used 
   // per thread.  Too small however, and your thread won't be created or your 
-  // workers won't run.
+  // jobs won't run.
   // pthread_attr_setstacksize(&pattr, PTHREAD_STACK_MIN);
   
-  wqueue = wqueue_init();
+  jqueue = jqueue_init();
 
-  pthread_create(&pro_thread, NULL, producer, wqueue);
+  pthread_create(&pro_thread, NULL, producer, jqueue);
   log(0, "Created producer thread.\n");
-  log(0, "Creating %d consumer threads...", num_threads);
+  log(0, "Creating %d worker threads...", num_threads);
 
   for (int i = 0; i < num_threads; i++) {
-    args[i] = (consumer_args *) malloc(sizeof(consumer_args));
-    args[i]->wqueue = wqueue;
+    args[i] = (worker_args *) malloc(sizeof(worker_args));
+    args[i]->jqueue = jqueue;
     args[i]->id = i;
 
-    // create_flag = pthread_create(&con_threads[i], &pattr, consumer, args[i]);
-    create_flag = pthread_create(&con_threads[i], NULL, consumer, args[i]);
+    // create_flag = pthread_create(&con_threads[i], &pattr, worker, args[i]);
+    create_flag = pthread_create(&con_threads[i], NULL, worker, args[i]);
 
     if (create_flag) {
       switch (create_flag) {
@@ -103,7 +103,7 @@ int main (int argc, char **argv)
       free(args[i]);
     }
 
-    wqueue_destroy(wqueue);
+    jqueue_destroy(jqueue);
   }
 
   cout << endl;
@@ -114,16 +114,16 @@ void read_opts(int argc, char **argv)
 {
   int opt;
 
-  total = LIMIT_TOTAL;
-  simul = LIMIT_SIMUL;
+  total_jobs = TOTAL_JOBS;
+  simul = QUEUE_SIZE;
   num_threads = NUM_THREADS;
   verbose = 0;
   steps = 1000;
 
-  while ((opt = getopt(argc, argv, "w:q:t:v:s:")) != -1) {
+  while ((opt = getopt(argc, argv, "j:q:t:v:s:")) != -1) {
     switch (opt) {
-    case 'w':
-      total = atoi(optarg);
+    case 'j':
+      total_jobs = atoi(optarg);
       break;
     case 'q':
       simul = atoi(optarg);
@@ -141,9 +141,9 @@ void read_opts(int argc, char **argv)
       cout << "Usage: " << argv[0] << " [args]" << endl;
       cout << endl;
       cout << "Args:" << endl;
-      cout << "-t consumer threads, default: 1" << endl;
-      cout << "-w total workers, default: 1000" << endl;
-      cout << "-q worker queue size, default: 200" << endl;
+      cout << "-t worker threads, default: 1" << endl;
+      cout << "-j total jobs, default: 1000" << endl;
+      cout << "-q job queue size, default: 200" << endl;
       cout << "-v verbosity: {0,1,2,3}, default: 0" << endl;
       cout << "-s reporting steps, default: 1000" << endl;
       cout << endl;
@@ -155,27 +155,27 @@ void read_opts(int argc, char **argv)
 
 void work(int id)
 {
-  int wait = rand() % WORKER_WAIT;
-  log(2, "Worker[%d]: Time spent = %d", id, wait);
+  int wait = rand() % JOB_WAIT;
+  log(2, "Job[%d]: Time spent = %d", id, wait);
   
   usleep(wait);
 }
 
-void execute_worker(worker *w)
+void execute_job(job *j)
 {
-  int divider = (int) ceilf((float) total / steps);
-  int verbosity = ((w->id + 1) % divider) ? 1 : 0;
-  float percent_complete = (float) (100 * (w->id + 1)) / total;
+  int divider = (int) ceilf((float) total_jobs / steps);
+  int verbosity = ((j->id + 1) % divider) ? 1 : 0;
+  float percent_complete = (float) (100 * (j->id + 1)) / total_jobs;
   int places = max(0, (int) log10f((float) steps) - 2);
 
-  w->work(w->id);
+  j->work(j->id);
 
   log_erase(
     verbosity, 
-    "%s, worker %d/%d (%.*f%%) reporting for duty!", 
-    w->message, 
-    w->id + 1, 
-    total, 
+    "%s, job %d/%d (%.*f%%) reporting for duty!", 
+    j->message, 
+    j->id + 1, 
+    total_jobs, 
     places, 
     percent_complete
   );
@@ -183,52 +183,52 @@ void execute_worker(worker *w)
 
 void *producer(void *args)
 {
-  worker_queue *wqueue;
-  worker *w;
+  job_queue *jqueue;
+  job *j;
   int wait;
 
-  wqueue = (worker_queue *) args;
+  jqueue = (job_queue *) args;
 
   log(1, "Producer: Starting.");
 
-  for (int i = 0; i < total; i++) {
-    w = (worker *) malloc(sizeof(worker));
-    w->id = i;
-    w->message = (char *) malloc(sizeof(MESSAGE));
-    w->work = work;
-    strcpy(w->message, MESSAGE);
+  for (int i = 0; i < total_jobs; i++) {
+    j = (job *) malloc(sizeof(job));
+    j->id = i;
+    j->message = (char *) malloc(sizeof(MESSAGE));
+    j->work = work;
+    strcpy(j->message, MESSAGE);
 
-    pthread_mutex_lock(wqueue->mutex);
+    pthread_mutex_lock(jqueue->mutex);
 
-    while (wqueue->workers->size() >= simul) {
-      log(2, "Producer: waiting to add worker %d, queue FULL (%d slots filled).", w->id, wqueue->workers->size());
-      pthread_cond_wait(wqueue->notFull, wqueue->mutex);
+    while (jqueue->jobs->size() >= simul) {
+      log(2, "Producer: waiting to add job %d, queue FULL (%d slots filled).", j->id, jqueue->jobs->size());
+      pthread_cond_wait(jqueue->notFull, jqueue->mutex);
     }
 
-    log(3, "Producer: Created worker %d.", w->id);
-    wqueue->workers->push(w);
+    log(3, "Producer: Created job %d.", j->id);
+    jqueue->jobs->push(j);
 
     log(
       2, 
-      "Producer: Added worker %d (%s) to queue, qsize = %d (m = %d bytes)", 
-      w->id, 
-      w->message, 
-      wqueue->workers->size(), 
-      wqueue->workers->size() * sizeof(worker)
+      "Producer: Added job %d (%s) to queue, qsize = %d (m = %d bytes)", 
+      j->id, 
+      j->message, 
+      jqueue->jobs->size(), 
+      jqueue->jobs->size() * sizeof(job)
     );
 
-    if (i + 1 == total) {
+    if (i + 1 == total_jobs) {
       log(1, "Producer: Finished, %d total jobs added", i + 1);
-      wqueue->producer_finished = true;
+      jqueue->producer_finished = true;
     }
 
-    pthread_mutex_unlock(wqueue->mutex);
+    pthread_mutex_unlock(jqueue->mutex);
 
-    if (wqueue->producer_finished) {
+    if (jqueue->producer_finished) {
       break;
     }
 
-    pthread_cond_signal(wqueue->notEmpty);
+    pthread_cond_signal(jqueue->notEmpty);
 
     wait = rand() % PRODUCER_WAIT;
     log(3, "Producer wait: %d", wait);
@@ -236,105 +236,105 @@ void *producer(void *args)
     usleep(wait);
   }
 
-  pthread_cond_broadcast(wqueue->notEmpty);
+  pthread_cond_broadcast(jqueue->notEmpty);
   pthread_exit(NULL);
 }
 
-void *consumer(void *args)
+void *worker(void *args)
 {
   int id;
-  worker_queue *wqueue;
-  worker *w;
+  job_queue *jqueue;
+  job *j;
   int wait;
   int jobs_executed = 0;
 
-  id = ((consumer_args *) args)->id;
-  wqueue = ((consumer_args *) args)->wqueue;
+  id = ((worker_args *) args)->id;
+  jqueue = ((worker_args *) args)->jqueue;
 
-  log(1, "Consumer[%d]: Starting.", id);
+  log(1, "Worker[%d]: Starting.", id);
 
   while (true) {
-    log(3, "Consumer[%d]: Checking queue.", id);
-    pthread_mutex_lock(wqueue->mutex);
+    log(3, "Worker[%d]: Checking queue.", id);
+    pthread_mutex_lock(jqueue->mutex);
 
-    while (wqueue->workers->empty() && !wqueue->producer_finished) {
-      log(2, "Consumer[%d]: queue EMPTY.", id);
-      pthread_cond_wait(wqueue->notEmpty, wqueue->mutex);
+    while (jqueue->jobs->empty() && !jqueue->producer_finished) {
+      log(2, "Worker[%d]: queue EMPTY.", id);
+      pthread_cond_wait(jqueue->notEmpty, jqueue->mutex);
     }
 
-    if (!wqueue->workers->empty()) {
-      w = wqueue->workers->front();
-      wqueue->workers->pop();
+    if (!jqueue->jobs->empty()) {
+      j = jqueue->jobs->front();
+      jqueue->jobs->pop();
 
       log(
         2, 
-        "Consumer[%d]: Removed worker %d (%s) from queue, qsize = %d (m = %d bytes)", 
+        "Worker[%d]: Removed job %d (%s) from queue, qsize = %d (m = %d bytes)", 
         id,
-        w->id, 
-        w->message, 
-        wqueue->workers->size(), 
-        wqueue->workers->size() * sizeof(worker)
+        j->id, 
+        j->message, 
+        jqueue->jobs->size(), 
+        jqueue->jobs->size() * sizeof(job)
       );
 
-      execute_worker(w);
+      execute_job(j);
       jobs_executed++;
-      worker_destroy(w);
+      job_destroy(j);
     }
 
-    pthread_mutex_unlock(wqueue->mutex);
+    pthread_mutex_unlock(jqueue->mutex);
 
-    if (wqueue->producer_finished && wqueue->workers->empty()) {
+    if (jqueue->producer_finished && jqueue->jobs->empty()) {
       break;
     }
 
-    pthread_cond_signal(wqueue->notFull);
+    pthread_cond_signal(jqueue->notFull);
     
-    wait = rand() % CONSUMER_WAIT;
-    log(3, "Consumer[%d]: wait = %d", id, wait);
+    wait = rand() % WORKER_WAIT;
+    log(3, "Worker[%d]: wait = %d", id, wait);
     
     usleep(wait);
   }
 
-  log(1, "Consumer[%d]: Queue says Producer is finished, exiting after executing %d jobs.", id, jobs_executed);
+  log(1, "Worker[%d]: Queue says Producer is finished, exiting after executing %d jobs.", id, jobs_executed);
 
-  pthread_cond_signal(wqueue->notEmpty);
+  pthread_cond_signal(jqueue->notEmpty);
   pthread_exit(NULL);
 }
 
-worker_queue *wqueue_init()
+job_queue *jqueue_init()
 {
-  worker_queue *wqueue = (worker_queue *) malloc(sizeof(worker_queue));
+  job_queue *jqueue = (job_queue *) malloc(sizeof(job_queue));
 
-  wqueue->workers = new queue<worker *>();
+  jqueue->jobs = new queue<job *>();
 
-  wqueue->mutex = (pthread_mutex_t *) malloc(sizeof(pthread_mutex_t));
-  pthread_mutex_init (wqueue->mutex, NULL);
+  jqueue->mutex = (pthread_mutex_t *) malloc(sizeof(pthread_mutex_t));
+  pthread_mutex_init (jqueue->mutex, NULL);
 
-  wqueue->notFull = (pthread_cond_t *) malloc(sizeof(pthread_cond_t));
-  pthread_cond_init (wqueue->notFull, NULL);
+  jqueue->notFull = (pthread_cond_t *) malloc(sizeof(pthread_cond_t));
+  pthread_cond_init (jqueue->notFull, NULL);
 
-  wqueue->notEmpty = (pthread_cond_t *) malloc(sizeof(pthread_cond_t));
-  pthread_cond_init (wqueue->notEmpty, NULL);
+  jqueue->notEmpty = (pthread_cond_t *) malloc(sizeof(pthread_cond_t));
+  pthread_cond_init (jqueue->notEmpty, NULL);
 
-  wqueue->producer_finished = false;
+  jqueue->producer_finished = false;
 
-  return wqueue;
+  return jqueue;
 }
 
-void wqueue_destroy(worker_queue *wqueue)
+void jqueue_destroy(job_queue *jqueue)
 {
-  delete wqueue->workers;
-  free(wqueue->mutex);
-  free(wqueue->notFull);
-  free(wqueue->notEmpty);
-  free(wqueue);
+  delete jqueue->jobs;
+  free(jqueue->mutex);
+  free(jqueue->notFull);
+  free(jqueue->notEmpty);
+  free(jqueue);
 }
 
 
-void worker_destroy(worker *w)
+void job_destroy(job *j)
 {
-  free(w->message);
-  free(w);
+  free(j->message);
+  free(j);
 }
 
 void log(int level, const char *format, ...)
