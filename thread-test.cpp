@@ -65,7 +65,7 @@ int main (int argc, char **argv)
   // Adjusting this from the default greatly reduces the amount of memory used 
   // per thread.  Too small however, and your thread won't be created or your 
   // workers won't run.
-  pthread_attr_setstacksize(&pattr, PTHREAD_STACK_MIN);
+  // pthread_attr_setstacksize(&pattr, PTHREAD_STACK_MIN);
   
   wqueue = wqueue_init();
 
@@ -78,7 +78,8 @@ int main (int argc, char **argv)
     args[i]->wqueue = wqueue;
     args[i]->id = i;
 
-    create_flag = pthread_create(&con_threads[i], &pattr, consumer, args[i]);
+    // create_flag = pthread_create(&con_threads[i], &pattr, consumer, args[i]);
+    create_flag = pthread_create(&con_threads[i], NULL, consumer, args[i]);
 
     if (create_flag) {
       switch (create_flag) {
